@@ -1,0 +1,16 @@
+# Default HK universe used by the dashboard when HK_UNIVERSE_SYMBOLS is not set.
+# Lines starting with # are ignored. Symbols can be provided as HK.00700, 00700.HK
+# or just the numeric code – they will be normalized automatically.
+HK.00001
+HK.00002
+HK.00003
+HK.00005
+HK.00011
+HK.00016
+HK.00083
+HK.00175
+HK.00700
+HK.00941
+HK.09988
+HK.03690
+

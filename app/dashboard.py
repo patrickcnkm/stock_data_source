@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import List, Optional, Literal
 
 import duckdb
@@ -16,6 +17,8 @@ router = APIRouter()
 
 # Trusted table for coverage & delete
 TICKS_TABLE = "fact_ticks_trusted"
+BASE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_HK_UNIVERSE_FILE = BASE_DIR / "data" / "hk_universe_default.txt"
 
 
 # ============================
@@ -60,13 +63,31 @@ def _normalize_symbol(symbol: str) -> str:
     return f"US.{s}"
 
 
-def _load_hk_universe(settings) -> List[str]:
-    """Load HK universe symbols from settings."""
-    raw = settings.hk_universe_symbols or ""
-    if not raw:
+def _load_default_hk_universe() -> List[str]:
+    """Load bundled fallback HK universe list from data/hk_universe_default.txt."""
+    if not DEFAULT_HK_UNIVERSE_FILE.exists():
         return []
-    symbols = [s.strip() for s in raw.split(",") if s.strip()]
-    return [_normalize_symbol(s) for s in symbols]
+    symbols: List[str] = []
+    with DEFAULT_HK_UNIVERSE_FILE.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            symbols.append(_normalize_symbol(line))
+    return symbols
+
+
+def _load_hk_universe(settings) -> List[str]:
+    """Load HK universe symbols from env var or bundled default file."""
+    raw = settings.hk_universe_symbols or ""
+    if raw:
+        symbols = [s.strip() for s in raw.split(",") if s.strip()]
+        normalized = [_normalize_symbol(s) for s in symbols]
+        if normalized:
+            return normalized
+    # Fallback to bundled default file so users get full ingestion out-of-the-box.
+    fallback = _load_default_hk_universe()
+    return fallback
 
 
 # ============================
@@ -109,8 +130,10 @@ def dashboard_ingest(req: IngestRequest):
         if not symbols:
             raise HTTPException(
                 status_code=400,
-                detail="HK_UNIVERSE_SYMBOLS environment variable is not set. "
-                       "Please set it to a comma-separated list of HK symbols (e.g., 'HK.00700,HK.00005').",
+                detail=(
+                    "No HK universe symbols found. "
+                    "Set HK_UNIVERSE_SYMBOLS env var or edit data/hk_universe_default.txt."
+                ),
             )
         # Last 60 days
         days = 60
@@ -122,8 +145,10 @@ def dashboard_ingest(req: IngestRequest):
         if not symbols:
             raise HTTPException(
                 status_code=400,
-                detail="HK_UNIVERSE_SYMBOLS environment variable is not set. "
-                       "Please set it to a comma-separated list of HK symbols (e.g., 'HK.00700,HK.00005').",
+                detail=(
+                    "No HK universe symbols found. "
+                    "Set HK_UNIVERSE_SYMBOLS env var or edit data/hk_universe_default.txt."
+                ),
             )
         # Use provided date range
         if not req.start_date or not req.end_date:
