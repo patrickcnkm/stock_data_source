@@ -14,6 +14,7 @@ class Settings(BaseSettings):
 
     # Universe management
     hk_universe_symbols: str | None = None  # comma separated list, e.g., "HK.00700,HK.00005"
+    allow_partial_commit: bool = True  # allow committing passing symbols even if validation fails
 
     # Alerts
     feishu_webhook: str | None = None
