@@ -19,20 +19,45 @@ def _normalize_symbol(symbol: str) -> str:
     return f"US.{symbol}"
 
 def commit_partition(con, symbol: str, file_date: str):
-    # Normalize symbol before committing
-    symbol = _normalize_symbol(symbol)
-    # move from staging to trusted
-    con.execute("""
-INSERT OR IGNORE INTO fact_ticks_trusted
+    # Normalize symbol for trusted table
+    normalized_symbol = _normalize_symbol(symbol)
+    
+    # Query staging with original symbol format (staging may have unnormalized symbols)
+    # Try both original and normalized formats to handle both cases
+    staging_data = con.execute("""
 SELECT std_symbol, ts_exchange, price, size, trade_id, cond, file_date
-FROM fact_ticks_staging WHERE std_symbol=? AND file_date=?
-""", [symbol, file_date])
+FROM fact_ticks_staging 
+WHERE file_date=? AND (std_symbol=? OR std_symbol=?)
+""", [file_date, symbol, normalized_symbol]).fetchdf()
+    
+    if staging_data.empty:
+        return  # No data in staging for this symbol/date
+    
+    # Normalize all symbols in the result to ensure consistency
+    staging_data['std_symbol'] = staging_data['std_symbol'].apply(_normalize_symbol)
+    
+    # Delete existing data for this symbol/date combination first (to allow overwrite)
+    con.execute("""
+DELETE FROM fact_ticks_trusted WHERE std_symbol=? AND file_date=?
+""", [normalized_symbol, file_date])
+    
+    # Insert into trusted with normalized symbols
+    con.register("staging_tmp", staging_data)
+    con.execute("""
+INSERT INTO fact_ticks_trusted
+SELECT std_symbol, ts_exchange, price, size, trade_id, cond, file_date
+FROM staging_tmp
+""")
 
-    # 1m aggregation
+    # 1m aggregation - delete existing bars for this symbol/date first
+    con.execute("""
+DELETE FROM fact_bars_1m_trusted WHERE std_symbol=? AND file_date=?
+""", [normalized_symbol, file_date])
+    
     df = con.execute("""
 SELECT ts_exchange, price, size FROM fact_ticks_trusted
 WHERE std_symbol=? AND file_date=? ORDER BY ts_exchange
-""", [symbol, file_date]).df()
+""", [normalized_symbol, file_date]).df()
     if df.empty:
         return
     df['bar_time'] = pd.to_datetime(df['ts_exchange']).dt.floor('min')
@@ -48,7 +73,7 @@ WHERE std_symbol=? AND file_date=? ORDER BY ts_exchange
     g['std_symbol'] = symbol
     g['file_date'] = pd.to_datetime(file_date).date()
     con.execute("""
-INSERT OR REPLACE INTO fact_bars_1m_trusted
+INSERT INTO fact_bars_1m_trusted
 SELECT std_symbol, bar_time, open, high, low, close, volume, vwap, trades, file_date FROM g
 """)
 
@@ -66,10 +91,22 @@ def main():
     # This avoids conflicts with the API server which uses read-only connections
     settings = get_settings()
     con = duckdb.connect(settings.duckdb_path, read_only=False)
-    for s in args.symbols:
-        # Normalize symbol before processing
-        normalized_s = _normalize_symbol(s)
-        for d in dates:
+    
+    # Group by date: for each date, delete ALL existing data first, then commit all symbols
+    # This ensures "full" ingestion overwrites "partial" ingestion
+    for d in dates:
+        # Delete all existing data for this date (to allow full overwrite)
+        con.execute("""
+DELETE FROM fact_ticks_trusted WHERE file_date=?
+""", [d])
+        con.execute("""
+DELETE FROM fact_bars_1m_trusted WHERE file_date=?
+""", [d])
+        
+        # Now commit all symbols for this date
+        for s in args.symbols:
+            # Normalize symbol before processing
+            normalized_s = _normalize_symbol(s)
             commit_partition(con, normalized_s, d)
             print(f"[COMMIT] {normalized_s} {d} committed to trusted + 1m")
 
