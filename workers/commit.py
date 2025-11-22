@@ -1,6 +1,7 @@
 import argparse, duckdb, pandas as pd
 from app.settings import get_settings
 
+
 def _normalize_symbol(symbol: str) -> str:
     """Normalize symbol to HK.XXXXX format consistently."""
     symbol = symbol.strip().upper()
@@ -18,46 +19,76 @@ def _normalize_symbol(symbol: str) -> str:
     # Default: assume US stock
     return f"US.{symbol}"
 
+
+def _symbol_aliases(symbol: str) -> list[str]:
+    """Return possible representations for a symbol so we can match staging rows."""
+    normalized = _normalize_symbol(symbol)
+    aliases = {symbol.strip().upper(), normalized}
+
+    if normalized.startswith("HK."):
+        code = normalized.split(".", 1)[1]
+        aliases.add(code)
+        aliases.add(f"{code}.HK")
+    elif normalized.startswith("US."):
+        ticker = normalized.split(".", 1)[1]
+        aliases.add(ticker)
+
+    return [alias for alias in aliases if alias]
+
 def commit_partition(con, symbol: str, file_date: str):
     # Normalize symbol for trusted table
     normalized_symbol = _normalize_symbol(symbol)
-    
-    # Query staging with original symbol format (staging may have unnormalized symbols)
-    # Try both original and normalized formats to handle both cases
-    staging_data = con.execute("""
+    aliases = _symbol_aliases(symbol)
+
+    placeholders = ",".join(["?"] * len(aliases))
+    staging_data = con.execute(
+        f"""
 SELECT std_symbol, ts_exchange, price, size, trade_id, cond, file_date
 FROM fact_ticks_staging 
-WHERE file_date=? AND (std_symbol=? OR std_symbol=?)
-""", [file_date, symbol, normalized_symbol]).fetchdf()
-    
+WHERE file_date=? AND std_symbol IN ({placeholders})
+""",
+        [file_date, *aliases],
+    ).fetchdf()
+
     if staging_data.empty:
         return  # No data in staging for this symbol/date
-    
+
     # Normalize all symbols in the result to ensure consistency
-    staging_data['std_symbol'] = staging_data['std_symbol'].apply(_normalize_symbol)
-    
+    staging_data["std_symbol"] = staging_data["std_symbol"].apply(_normalize_symbol)
+
     # Delete existing data for this symbol/date combination first (to allow overwrite)
-    con.execute("""
+    con.execute(
+        """
 DELETE FROM fact_ticks_trusted WHERE std_symbol=? AND file_date=?
-""", [normalized_symbol, file_date])
-    
+""",
+        [normalized_symbol, file_date],
+    )
+
     # Insert into trusted with normalized symbols
     con.register("staging_tmp", staging_data)
-    con.execute("""
+    con.execute(
+        """
 INSERT INTO fact_ticks_trusted
 SELECT std_symbol, ts_exchange, price, size, trade_id, cond, file_date
 FROM staging_tmp
-""")
+"""
+    )
 
     # 1m aggregation - delete existing bars for this symbol/date first
-    con.execute("""
+    con.execute(
+        """
 DELETE FROM fact_bars_1m_trusted WHERE std_symbol=? AND file_date=?
-""", [normalized_symbol, file_date])
-    
-    df = con.execute("""
+""",
+        [normalized_symbol, file_date],
+    )
+
+    df = con.execute(
+        """
 SELECT ts_exchange, price, size FROM fact_ticks_trusted
 WHERE std_symbol=? AND file_date=? ORDER BY ts_exchange
-""", [normalized_symbol, file_date]).df()
+""",
+        [normalized_symbol, file_date],
+    ).df()
     if df.empty:
         return
     df['bar_time'] = pd.to_datetime(df['ts_exchange']).dt.floor('min')
@@ -70,12 +101,14 @@ WHERE std_symbol=? AND file_date=? ORDER BY ts_exchange
         vwap=('price','mean'),
         trades=('price','count')
     )
-    g['std_symbol'] = symbol
-    g['file_date'] = pd.to_datetime(file_date).date()
-    con.execute("""
+    g["std_symbol"] = normalized_symbol
+    g["file_date"] = pd.to_datetime(file_date).date()
+    con.execute(
+        """
 INSERT INTO fact_bars_1m_trusted
 SELECT std_symbol, bar_time, open, high, low, close, volume, vwap, trades, file_date FROM g
-""")
+"""
+    )
 
 def main():
     ap = argparse.ArgumentParser()

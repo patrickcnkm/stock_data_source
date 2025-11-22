@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import math
 import subprocess
 from datetime import date, datetime, timedelta
-from pathlib import Path
+import math
 from typing import List, Optional, Literal
 
 import duckdb
@@ -12,13 +13,12 @@ from pydantic import BaseModel
 
 from .deps import get_duck
 from .settings import get_settings
+from .universe import load_hk_universe
 
 router = APIRouter()
 
 # Trusted table for coverage & delete
 TICKS_TABLE = "fact_ticks_trusted"
-BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_HK_UNIVERSE_FILE = BASE_DIR / "data" / "hk_universe_default.txt"
 
 
 # ============================
@@ -63,31 +63,15 @@ def _normalize_symbol(symbol: str) -> str:
     return f"US.{s}"
 
 
-def _load_default_hk_universe() -> List[str]:
-    """Load bundled fallback HK universe list from data/hk_universe_default.txt."""
-    if not DEFAULT_HK_UNIVERSE_FILE.exists():
-        return []
-    symbols: List[str] = []
-    with DEFAULT_HK_UNIVERSE_FILE.open() as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            symbols.append(_normalize_symbol(line))
-    return symbols
+def _json_safe(value):
+    """Convert NaN/Inf to None so responses are JSON serializable."""
+    if value is None:
+        return None
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    return value
 
 
-def _load_hk_universe(settings) -> List[str]:
-    """Load HK universe symbols from env var or bundled default file."""
-    raw = settings.hk_universe_symbols or ""
-    if raw:
-        symbols = [s.strip() for s in raw.split(",") if s.strip()]
-        normalized = [_normalize_symbol(s) for s in symbols]
-        if normalized:
-            return normalized
-    # Fallback to bundled default file so users get full ingestion out-of-the-box.
-    fallback = _load_default_hk_universe()
-    return fallback
 
 
 # ============================
@@ -117,6 +101,7 @@ def dashboard_ingest(req: IngestRequest):
 
     # ---- 1. symbols ----
     settings = get_settings()
+    allow_partial_commit = settings.allow_partial_commit
     today = date.today()
     yesterday = today - timedelta(days=1)
 
@@ -126,7 +111,7 @@ def dashboard_ingest(req: IngestRequest):
         symbols = [_normalize_symbol(s) for s in req.symbols]
     elif req.mode == "full_last_60d":
         # Load HK universe
-        symbols = _load_hk_universe(settings)
+        symbols = load_hk_universe()
         if not symbols:
             raise HTTPException(
                 status_code=400,
@@ -141,7 +126,7 @@ def dashboard_ingest(req: IngestRequest):
         effective_start = today - timedelta(days=days)
     elif req.mode == "full_range":
         # Load HK universe
-        symbols = _load_hk_universe(settings)
+        symbols = load_hk_universe()
         if not symbols:
             raise HTTPException(
                 status_code=400,
@@ -296,32 +281,50 @@ def dashboard_ingest(req: IngestRequest):
         "failures": [],
     }
 
+    failed_symbols: set[str] = set()
     if not fail_df.empty:
         for _, row in fail_df.iterrows():
+            symbol = row["std_symbol"]
+            failed_symbols.add(symbol)
             validation_summary["failures"].append(
                 {
-                    "symbol": row["std_symbol"],
+                    "symbol": symbol,
                     "file_date": row["file_date"],
                     "rule_name": row["rule_name"],
-                    "metric": row["metric"],
-                    "threshold": row["threshold"],
+                    "metric": _json_safe(row["metric"]),
+                    "threshold": _json_safe(row["threshold"]),
                 }
             )
+        if not allow_partial_commit:
+            return {
+                "status": "validation_failed",
+                "plan": plan,
+                "steps": steps_log,
+                "validation": validation_summary,
+            }
+
+    symbols_to_commit = [s for s in symbols if s not in failed_symbols]
+
+    if not symbols_to_commit:
         return {
             "status": "validation_failed",
             "plan": plan,
             "steps": steps_log,
             "validation": validation_summary,
+            "message": "No symbols passed validation; nothing committed.",
         }
+
+    if failed_symbols:
+        plan.setdefault("skipped_symbols", sorted(failed_symbols))
 
     # 5) No failures -> commit staging → trusted
     run_step(
         "commit",
-        ["python", "-m", "workers.commit", "--symbols", *symbols, "--days", str(days)],
+        ["python", "-m", "workers.commit", "--symbols", *symbols_to_commit, "--days", str(days)],
     )
 
     return {
-        "status": "success",
+        "status": "success" if not failed_symbols else "partial_success",
         "plan": plan,
         "steps": steps_log,
         "validation": validation_summary,
