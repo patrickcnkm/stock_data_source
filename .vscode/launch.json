@@ -1,0 +1,48 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI: Run server (uvicorn)",
+      "type": "python",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--reload",
+        "--host", "127.0.0.1",
+        "--port", "8000"
+      ],
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Worker: Realtime Gateway (Futu → Redis)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/workers/realtime_gateway.py",
+      "args": ["--symbols", "00700.HK", "AAPL", "--with-orderbook"],
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Worker: Subscription Rotation",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/workers/sub_rotation_real.py",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Start: API + Realtime + Rotation",
+      "configurations": [
+        "FastAPI: Run server (uvicorn)",
+        "Worker: Realtime Gateway (Futu → Redis)",
+        "Worker: Subscription Rotation"
+      ],
+      "stopAll": true
+    }
+  ]
+}
