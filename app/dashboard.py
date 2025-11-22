@@ -60,6 +60,15 @@ def _normalize_symbol(symbol: str) -> str:
     return f"US.{s}"
 
 
+def _load_hk_universe(settings) -> List[str]:
+    """Load HK universe symbols from settings."""
+    raw = settings.hk_universe_symbols or ""
+    if not raw:
+        return []
+    symbols = [s.strip() for s in raw.split(",") if s.strip()]
+    return [_normalize_symbol(s) for s in symbols]
+
+
 # ============================
 # 1) Ingestion + Verification
 # ============================
@@ -86,42 +95,74 @@ def dashboard_ingest(req: IngestRequest):
     """
 
     # ---- 1. symbols ----
-    if req.mode != "partial":
-        raise HTTPException(
-            status_code=400,
-            detail="Only mode=partial is supported at the moment. "
-                   "FULL_LAST_60D/FULL_RANGE need a HK symbol universe implementation.",
-        )
-
-    if not req.symbols:
-        raise HTTPException(status_code=400, detail="symbols is required for partial mode")
-
-    symbols = [_normalize_symbol(s) for s in req.symbols]
-
-    # ---- 2. compute days based on date range (or default) ----
+    settings = get_settings()
     today = date.today()
     yesterday = today - timedelta(days=1)
 
-    if req.start_date and req.end_date:
+    if req.mode == "partial":
+        if not req.symbols:
+            raise HTTPException(status_code=400, detail="symbols is required for partial mode")
+        symbols = [_normalize_symbol(s) for s in req.symbols]
+    elif req.mode == "full_last_60d":
+        # Load HK universe
+        symbols = _load_hk_universe(settings)
+        if not symbols:
+            raise HTTPException(
+                status_code=400,
+                detail="HK_UNIVERSE_SYMBOLS environment variable is not set. "
+                       "Please set it to a comma-separated list of HK symbols (e.g., 'HK.00700,HK.00005').",
+            )
+        # Last 60 days
+        days = 60
+        effective_end = yesterday
+        effective_start = today - timedelta(days=days)
+    elif req.mode == "full_range":
+        # Load HK universe
+        symbols = _load_hk_universe(settings)
+        if not symbols:
+            raise HTTPException(
+                status_code=400,
+                detail="HK_UNIVERSE_SYMBOLS environment variable is not set. "
+                       "Please set it to a comma-separated list of HK symbols (e.g., 'HK.00700,HK.00005').",
+            )
+        # Use provided date range
+        if not req.start_date or not req.end_date:
+            raise HTTPException(
+                status_code=400,
+                detail="Both start_date and end_date are required for full_range mode.",
+            )
         if req.end_date < req.start_date:
             raise HTTPException(status_code=400, detail="end_date must be >= start_date")
         if req.end_date > yesterday:
             raise HTTPException(status_code=400, detail="end_date must be <= yesterday")
-
-        # We want to cover [start_date, end_date] ∩ [*, yesterday]
         effective_end = min(req.end_date, yesterday)
         effective_start = req.start_date
         days = (effective_end - effective_start).days + 1
-    elif not req.start_date and not req.end_date:
-        # default: last 2 days = [today-2, today-1]
-        days = 2
-        effective_end = yesterday
-        effective_start = today - timedelta(days=days)
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="Either provide BOTH start_date and end_date, or leave BOTH empty.",
-        )
+        raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
+
+    # ---- 2. compute days based on date range (or default) ----
+    if req.mode == "partial":
+        if req.start_date and req.end_date:
+            if req.end_date < req.start_date:
+                raise HTTPException(status_code=400, detail="end_date must be >= start_date")
+            if req.end_date > yesterday:
+                raise HTTPException(status_code=400, detail="end_date must be <= yesterday")
+
+            # We want to cover [start_date, end_date] ∩ [*, yesterday]
+            effective_end = min(req.end_date, yesterday)
+            effective_start = req.start_date
+            days = (effective_end - effective_start).days + 1
+        elif not req.start_date and not req.end_date:
+            # default: last 2 days = [today-2, today-1]
+            days = 2
+            effective_end = yesterday
+            effective_start = today - timedelta(days=days)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either provide BOTH start_date and end_date, or leave BOTH empty.",
+            )
 
     if days <= 0:
         raise HTTPException(status_code=400, detail="Computed days <= 0, please check your date range.")
