@@ -1,0 +1,34 @@
+
+# app/clients/longbridge_adapter.py
+# Optional adapter for Longbridge minute bars (for B-group validation).
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import List, Dict
+import datetime as dt
+
+try:
+    # Longbridge official SDK (if installed)
+    # pip install longbridge
+    import longbridge  # type: ignore
+    LB_AVAILABLE = True
+except Exception:
+    LB_AVAILABLE = False
+
+@dataclass
+class LBSettings:
+    app_key: str
+    app_secret: str
+    access_token: str
+    region: str = "hk"
+
+class LongbridgeAdapter:
+    def __init__(self, app_key: str, app_secret: str, access_token: str, region: str = "hk"):
+        if not LB_AVAILABLE:
+            raise RuntimeError("Longbridge SDK not available. Please `pip install longbridge`.")
+        # TODO: initialize client via SDK; store credentials
+        self.client = None  # placeholder
+
+    def fetch_1m_bars(self, symbol: str, start: dt.datetime, end: dt.datetime) -> List[Dict]:
+        # TODO: call SDK to fetch 1-minute bars between [start, end)
+        # Return list of dicts with keys: bar_time, open, high, low, close, volume, trades(optional), vwap(optional)
+        raise NotImplementedError("Implement Longbridge minute bars fetch with your SDK usage.")

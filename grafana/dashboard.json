@@ -1,0 +1,32 @@
+{
+  "title": "Quant Platform Overview",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Tick Ingestion Rate",
+      "targets": [
+        {
+          "expr": "sum(rate(tick_ingestion_rate[1m])) by (symbol)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "DuckDB Query Latency P95 (ms)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(duckdb_query_latency_ms_bucket[5m])) by (le))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Validation Pass Rate",
+      "targets": [
+        {
+          "expr": "validation_pass_rate"
+        }
+      ]
+    }
+  ]
+}

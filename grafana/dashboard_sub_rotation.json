@@ -1,0 +1,19 @@
+{
+  "title": "Futu Subscription Rotation",
+  "schemaVersion": 36,
+  "version": 1,
+  "time": {"from":"now-6h","to":"now"},
+  "panels": [
+    {"type":"stat","title":"Futu Subscriptions Used","gridPos":{"h":4,"w":6,"x":0,"y":0},"targets":[{"expr":"futu_sub_used"}]},
+    {"type":"stat","title":"Futu Subscriptions Remain","gridPos":{"h":4,"w":6,"x":6,"y":0},"targets":[{"expr":"futu_sub_remain"}]},
+    {"type":"stat","title":"HK ORDER_BOOK In Use","gridPos":{"h":4,"w":6,"x":12,"y":0},"targets":[{"expr":"futu_sub_orderbook_hk"}]},
+    {"type":"timeseries","title":"API Latency (ms)","gridPos":{"h":8,"w":12,"x":0,"y":4},
+     "targets":[{"expr":"rate(futu_api_latency_ms_sum[5m]) / rate(futu_api_latency_ms_count[5m])"}]},
+    {"type":"bargauge","title":"Rotate Failures by Phase (5m)","gridPos":{"h":8,"w":12,"x":12,"y":4},
+     "targets":[{"expr":"increase(futu_sub_rotate_fail_total[5m])","legendFormat":"{{phase}}"}]},
+    {"type":"timeseries","title":"Rotate Success (rate)","gridPos":{"h":8,"w":12,"x":0,"y":12},
+     "targets":[{"expr":"rate(futu_sub_rotate_success_total[5m])"}]},
+    {"type":"stat","title":"Last Switch (ts)","gridPos":{"h":4,"w":6,"x":12,"y":12},
+     "targets":[{"expr":"futu_sub_last_switch_timestamp"}]}
+  ]
+}

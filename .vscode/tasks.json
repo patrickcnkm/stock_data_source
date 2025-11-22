@@ -1,0 +1,8 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {"label": "Python: Create .venv","type": "shell","command": "python3 -m venv .venv","problemMatcher": []},
+    {"label": "Python: Install requirements","type": "shell","command": "${workspaceFolder}/.venv/bin/pip install -r requirements.txt || pip install -r requirements.txt","dependsOn": ["Python: Create .venv"],"problemMatcher": []},
+    {"label": "Docker: Up Redis (optional)","type": "shell","command": "docker compose up -d redis || docker-compose up -d redis","problemMatcher": []}
+  ]
+}
