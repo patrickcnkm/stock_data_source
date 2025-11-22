@@ -267,22 +267,23 @@ def dashboard_ingest(req: IngestRequest):
 # ============================
 
 @router.get("/api/dashboard/coverage/summary")
-def coverage_summary(duck=Depends(get_duck)):
+def coverage_summary():
     """Return min/max date and total distinct symbols in trusted table."""
     try:
-        df = duck.execute(
-            f"""
-            SELECT
-              MIN(date_trunc('day', ts_exchange)) AS min_date,
-              MAX(date_trunc('day', ts_exchange)) AS max_date,
-              COUNT(DISTINCT std_symbol)       AS total_symbols
-            FROM {TICKS_TABLE}
-            """
-        ).fetch_df()
+        with get_duck(read_only=True) as duck:
+            df = duck.execute(
+                f"""
+                SELECT
+                  MIN(date_trunc('day', ts_exchange)) AS min_date,
+                  MAX(date_trunc('day', ts_exchange)) AS max_date,
+                  COUNT(DISTINCT std_symbol)       AS total_symbols
+                FROM {TICKS_TABLE}
+                """
+            ).fetch_df()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB error: {e}")
 
-    if df.empty or df["min_date"][0] is None:
+    if df.empty or df.iloc[0]["min_date"] is None:
         return {
             "has_data": False,
             "min_date": None,
@@ -300,7 +301,7 @@ def coverage_summary(duck=Depends(get_duck)):
 
 
 @router.get("/api/dashboard/coverage/daily")
-def coverage_daily(duck=Depends(get_duck)):
+def coverage_daily():
     """
     Per-day coverage:
       - trade_date
@@ -308,31 +309,32 @@ def coverage_daily(duck=Depends(get_duck)):
       - coverage: 'full' or 'partial' relative to max symbol_count
     """
     try:
-        df = duck.execute(
-            f"""
-            WITH daily AS (
-              SELECT
-                date_trunc('day', ts_exchange) AS trade_date,
-                COUNT(DISTINCT std_symbol)   AS symbol_count
-              FROM {TICKS_TABLE}
-              GROUP BY 1
-            ),
-            max_sym AS (
-              SELECT MAX(symbol_count) AS max_count FROM daily
-            )
-            SELECT
-              daily.trade_date,
-              daily.symbol_count,
-              max_sym.max_count,
-              CASE WHEN daily.symbol_count = max_sym.max_count
-                   THEN 'full'
-                   ELSE 'partial'
-              END AS coverage
-            FROM daily
-            CROSS JOIN max_sym
-            ORDER BY daily.trade_date
-            """
-        ).fetch_df()
+        with get_duck(read_only=True) as duck:
+            df = duck.execute(
+                f"""
+                WITH daily AS (
+                  SELECT
+                    date_trunc('day', ts_exchange) AS trade_date,
+                    COUNT(DISTINCT std_symbol)   AS symbol_count
+                  FROM {TICKS_TABLE}
+                  GROUP BY 1
+                ),
+                max_sym AS (
+                  SELECT MAX(symbol_count) AS max_count FROM daily
+                )
+                SELECT
+                  daily.trade_date,
+                  daily.symbol_count,
+                  max_sym.max_count,
+                  CASE WHEN daily.symbol_count = max_sym.max_count AND max_sym.max_count > 1
+                       THEN 'full'
+                       ELSE 'partial'
+                  END AS coverage
+                FROM daily
+                CROSS JOIN max_sym
+                ORDER BY daily.trade_date
+                """
+            ).fetch_df()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB error: {e}")
 
@@ -349,18 +351,19 @@ def coverage_daily(duck=Depends(get_duck)):
 
 
 @router.get("/api/dashboard/coverage/day")
-def coverage_day_details(trade_date: date, duck=Depends(get_duck)):
+def coverage_day_details(trade_date: date):
     """Return symbol list for a specific day in trusted table."""
     try:
-        df = duck.execute(
-            f"""
-            SELECT DISTINCT std_symbol
-            FROM {TICKS_TABLE}
-            WHERE date_trunc('day', ts_exchange) = ?
-            ORDER BY std_symbol
-            """,
-            [trade_date],
-        ).fetch_df()
+        with get_duck(read_only=True) as duck:
+            df = duck.execute(
+                f"""
+                SELECT DISTINCT std_symbol
+                FROM {TICKS_TABLE}
+                WHERE date_trunc('day', ts_exchange) = ?
+                ORDER BY std_symbol
+                """,
+                [trade_date],
+            ).fetch_df()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB error: {e}")
 
@@ -376,7 +379,7 @@ def coverage_day_details(trade_date: date, duck=Depends(get_duck)):
 # ============================
 
 @router.post("/api/dashboard/delete")
-def dashboard_delete(req: DeleteRequest, duck=Depends(get_duck)):
+def dashboard_delete(req: DeleteRequest):
     """
     Delete from trusted table by:
       - optional symbol list
@@ -408,16 +411,17 @@ def dashboard_delete(req: DeleteRequest, duck=Depends(get_duck)):
     where_clause = " AND ".join(conditions) if conditions else "1=1"
 
     try:
-        cnt_df = duck.execute(
-            f"SELECT COUNT(*) AS cnt FROM {TICKS_TABLE} WHERE {where_clause}",
-            params,
-        ).fetch_df()
-        to_delete = int(cnt_df["cnt"][0])
+        with get_duck(read_only=False) as duck:
+            cnt_df = duck.execute(
+                f"SELECT COUNT(*) AS cnt FROM {TICKS_TABLE} WHERE {where_clause}",
+                params,
+            ).fetch_df()
+            to_delete = int(cnt_df["cnt"][0])
 
-        duck.execute(
-            f"DELETE FROM {TICKS_TABLE} WHERE {where_clause}",
-            params,
-        )
+            duck.execute(
+                f"DELETE FROM {TICKS_TABLE} WHERE {where_clause}",
+                params,
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB error: {e}")
 
@@ -445,17 +449,7 @@ def dashboard_page():
     body { font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 20px; }
     h2 { margin-top: 24px; }
     fieldset { margin-bottom: 16px; }
-    pre { background: #111; color: #0f0; padding: 10px; border-radius: 4px; max-height: 260px; overflow: auto; font-size: 12px; }
-    .status-box { padding: 12px; border-radius: 4px; margin: 8px 0; }
-    .status-success { background: #d1fae5; border: 1px solid #10b981; color: #065f46; }
-    .status-failed { background: #fee2e2; border: 1px solid #ef4444; color: #991b1b; }
-    .status-partial { background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; }
-    .detail-toggle { background: #6b7280; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; margin-left: 8px; }
-    .detail-content { display: none; margin-top: 8px; padding: 8px; background: #f9fafb; border-radius: 4px; font-size: 11px; }
-    .detail-content.show { display: block; }
-    .step-item { margin: 4px 0; padding: 4px; }
-    .step-success { color: #10b981; }
-    .step-failed { color: #ef4444; }
+    pre { background: #111; color: #0f0; padding: 10px; border-radius: 4px; max-height: 260px; overflow: auto; }
     table { border-collapse: collapse; margin-top: 8px; }
     th, td { border: 1px solid #ccc; padding: 4px 8px; font-size: 13px; }
     th { background: #f0f0f0; }
@@ -483,18 +477,18 @@ def dashboard_page():
         Partial: Specify stock(s) + date range
       </label><br>
       <label>
-        <input type="radio" name="mode" value="full_last_60d" disabled>
-        Full: All HK stocks, last 60 days (TODO: HK universe)
+        <input type="radio" name="mode" value="full_last_60d">
+        Full: All HK stocks, last 60 days <span style="color: #666; font-size: 11px;">(Requires HK_UNIVERSE_SYMBOLS env var)</span>
       </label><br>
       <label>
-        <input type="radio" name="mode" value="full_range" disabled>
-        Full: All HK stocks, custom date range (TODO: HK universe)
+        <input type="radio" name="mode" value="full_range">
+        Full: All HK stocks, custom date range <span style="color: #666; font-size: 11px;">(end date must be ≤ yesterday)</span>
       </label>
     </div>
 
     <div class="flex-row" style="margin-top: 8px;">
       <label>Symbols (comma separated, HK only):</label>
-      <input id="ingest-symbols" style="width: 280px;" placeholder="e.g. 00700.HK,00005.HK" />
+      <input id="ingest-symbols" style="width: 280px;" placeholder="e.g. 00700.HK,00005.HK" value="HK.00700" />
     </div>
     <div class="flex-row" style="margin-top: 8px;">
       <label>Start date (optional):</label>
@@ -507,11 +501,7 @@ def dashboard_page():
       <button class="btn btn-primary" onclick="triggerIngest()">Run Ingestion + Verification</button>
     </div>
   </fieldset>
-  <div id="ingest-result"></div>
-  <div id="ingest-detail-wrapper" style="display: none;">
-    <button class="detail-toggle" type="button" onclick="toggleDetail('ingest', event)">Show Details</button>
-    <pre id="ingest-log" class="detail-content">[Ready]</pre>
-  </div>
+  <pre id="ingest-log">[Ready]</pre>
 
   <!-- 2. Coverage Overview -->
   <h2>2. Ingested Data Overview</h2>
@@ -540,6 +530,15 @@ def dashboard_page():
   <pre id="delete-log">[No delete run]</pre>
 
 <script>
+// Set default date to yesterday
+(function() {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const dateStr = yesterday.toISOString().split('T')[0];
+  document.getElementById('ingest-start').value = dateStr;
+  document.getElementById('ingest-end').value = dateStr;
+})();
+
 async function triggerIngest() {
   const mode = document.querySelector('input[name="mode"]:checked').value;
   const symbolsRaw = document.getElementById('ingest-symbols').value.trim();
@@ -557,6 +556,21 @@ async function triggerIngest() {
       body.start_date = null;
       body.end_date = null;
     }
+  } else if (mode === 'full_last_60d') {
+    // Full mode: last 60 days, no symbols or dates needed
+    body.symbols = null;
+    body.start_date = null;
+    body.end_date = null;
+  } else if (mode === 'full_range') {
+    // Full mode: custom date range
+    if (start && end) {
+      body.start_date = start;
+      body.end_date = end;
+    } else {
+      body.start_date = null;
+      body.end_date = null;
+    }
+    body.symbols = null;
   }
 
   const log = document.getElementById('ingest-log');
