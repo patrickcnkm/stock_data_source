@@ -445,7 +445,17 @@ def dashboard_page():
     body { font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; margin: 20px; }
     h2 { margin-top: 24px; }
     fieldset { margin-bottom: 16px; }
-    pre { background: #111; color: #0f0; padding: 10px; border-radius: 4px; max-height: 260px; overflow: auto; }
+    pre { background: #111; color: #0f0; padding: 10px; border-radius: 4px; max-height: 260px; overflow: auto; font-size: 12px; }
+    .status-box { padding: 12px; border-radius: 4px; margin: 8px 0; }
+    .status-success { background: #d1fae5; border: 1px solid #10b981; color: #065f46; }
+    .status-failed { background: #fee2e2; border: 1px solid #ef4444; color: #991b1b; }
+    .status-partial { background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; }
+    .detail-toggle { background: #6b7280; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; margin-left: 8px; }
+    .detail-content { display: none; margin-top: 8px; padding: 8px; background: #f9fafb; border-radius: 4px; font-size: 11px; }
+    .detail-content.show { display: block; }
+    .step-item { margin: 4px 0; padding: 4px; }
+    .step-success { color: #10b981; }
+    .step-failed { color: #ef4444; }
     table { border-collapse: collapse; margin-top: 8px; }
     th, td { border: 1px solid #ccc; padding: 4px 8px; font-size: 13px; }
     th { background: #f0f0f0; }
@@ -497,7 +507,11 @@ def dashboard_page():
       <button class="btn btn-primary" onclick="triggerIngest()">Run Ingestion + Verification</button>
     </div>
   </fieldset>
-  <pre id="ingest-log">[Ready]</pre>
+  <div id="ingest-result"></div>
+  <div id="ingest-detail-wrapper" style="display: none;">
+    <button class="detail-toggle" type="button" onclick="toggleDetail('ingest', event)">Show Details</button>
+    <pre id="ingest-log" class="detail-content">[Ready]</pre>
+  </div>
 
   <!-- 2. Coverage Overview -->
   <h2>2. Ingested Data Overview</h2>
