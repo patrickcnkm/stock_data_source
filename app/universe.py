@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from futu import Market, OpenQuoteContext, RET_OK, SecurityType
 
 from .settings import get_settings
+from .futu_rate_limit import rate_limit
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CACHE_PATH = BASE_DIR / "data" / "hk_universe_cache.json"
@@ -56,6 +57,7 @@ def _write_cache(symbols: List[str]) -> None:
 def _fetch_hk_universe_from_futu(settings) -> List[str]:
     ctx = OpenQuoteContext(host=settings.futu_opend_ip, port=settings.futu_opend_quote_port)
     try:
+        rate_limit()  # Rate limit before API call
         ret, df = ctx.get_stock_basicinfo(market=Market.HK, stock_type=SecurityType.STOCK)
         if ret != RET_OK or df is None or df.empty:
             raise RuntimeError("Futu get_stock_basicinfo failed")

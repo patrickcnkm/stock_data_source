@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from .deps import get_duck
 from .settings import get_settings
 from .universe import load_hk_universe
+from .futu_rate_limit import get_quota_status, reset_quota
 
 router = APIRouter()
 
@@ -502,6 +503,19 @@ def ingest_day_stats(trade_date: date):
 # 3) Delete endpoint
 # ============================
 
+@router.get("/api/dashboard/quota")
+def dashboard_quota_status():
+    """Get current Futu API quota status."""
+    return get_quota_status()
+
+
+@router.post("/api/dashboard/quota/reset")
+def dashboard_quota_reset():
+    """Reset the Futu API total quota counter."""
+    reset_quota()
+    return {"status": "quota_reset", "quota": get_quota_status()}
+
+
 @router.post("/api/dashboard/delete")
 def dashboard_delete(req: DeleteRequest):
     """
@@ -662,6 +676,14 @@ def dashboard_page():
   <button id="btn-coverage" type="button" class="btn btn-secondary" onclick="loadCoverage()">Reload Coverage</button>
   <div id="coverage-summary" style="margin-top: 8px; font-size: 13px;"></div>
   <div id="coverage-table-wrapper" style="margin-top: 8px;"></div>
+
+  <!-- 2.5. Futu API Quota Status -->
+  <h2>2.5. Futu API Quota Status</h2>
+  <div style="margin-top: 8px;">
+    <button id="btn-quota" type="button" class="btn btn-secondary" onclick="loadQuotaStatus()">Refresh Quota Status</button>
+    <button id="btn-quota-reset" type="button" class="btn btn-danger" onclick="resetQuota()" style="margin-left: 8px;">Reset Total Quota</button>
+  </div>
+  <div id="quota-status" style="margin-top: 8px; font-size: 13px; padding: 8px; background: #f5f5f5; border-radius: 4px;"></div>
 
   <!-- 3. Data Operations (Delete) -->
   <h2>3. Data Operations (Delete)</h2>
@@ -874,25 +896,87 @@ window.runDelete = async function runDelete() {
   }
 }
 
+window.loadQuotaStatus = async function loadQuotaStatus() {
+  const statusDiv = document.getElementById('quota-status');
+  statusDiv.textContent = 'Loading quota status...';
+
+  try {
+    const res = await fetch('/api/dashboard/quota');
+    const data = await res.json();
+
+    const pct30s = Math.round((data.requests_in_30s_window / 60) * 100);
+    const pctTotal = Math.round((data.total_requests / 300) * 100);
+    const color30s = pct30s >= 90 ? '#dc2626' : pct30s >= 70 ? '#f59e0b' : '#16a34a';
+    const colorTotal = pctTotal >= 90 ? '#dc2626' : pctTotal >= 70 ? '#f59e0b' : '#16a34a';
+
+    statusDiv.innerHTML = `
+      <div><b>30-Second Window:</b> ${data.requests_in_30s_window} / 60 requests (${data.remaining_30s_quota} remaining)
+        <div style="width: 100%; background: #e5e7eb; border-radius: 4px; height: 20px; margin-top: 4px;">
+          <div style="width: ${pct30s}%; background: ${color30s}; height: 100%; border-radius: 4px; transition: width 0.3s;"></div>
+        </div>
+      </div>
+      <div style="margin-top: 12px;"><b>Total Quota:</b> ${data.total_requests} / 300 requests (${data.remaining_total_quota} remaining)
+        <div style="width: 100%; background: #e5e7eb; border-radius: 4px; height: 20px; margin-top: 4px;">
+          <div style="width: ${pctTotal}%; background: ${colorTotal}; height: 100%; border-radius: 4px; transition: width 0.3s;"></div>
+        </div>
+      </div>
+      <div style="margin-top: 8px; font-size: 11px; color: #666;">
+        Quota reset time: ${new Date(data.quota_reset_time * 1000).toLocaleString()}
+      </div>
+    `;
+  } catch (e) {
+    statusDiv.textContent = 'Error loading quota status: ' + e;
+  }
+}
+
+window.resetQuota = async function resetQuota() {
+  if (!confirm('Are you sure you want to reset the total quota counter? This will allow up to 300 more requests.')) {
+    return;
+  }
+
+  const statusDiv = document.getElementById('quota-status');
+  statusDiv.textContent = 'Resetting quota...';
+
+  try {
+    const res = await fetch('/api/dashboard/quota/reset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'}
+    });
+    const data = await res.json();
+    await loadQuotaStatus();
+  } catch (e) {
+    statusDiv.textContent = 'Error resetting quota: ' + e;
+  }
+}
+
 // Attach event listeners when DOM is ready (backup to onclick handlers)
 function attachButtonListeners() {
   const ingestBtn = document.getElementById('btn-ingest');
   const statsBtn = document.getElementById('btn-stats');
   const coverageBtn = document.getElementById('btn-coverage');
   const deleteBtn = document.getElementById('btn-delete');
+  const quotaBtn = document.getElementById('btn-quota');
+  const quotaResetBtn = document.getElementById('btn-quota-reset');
   
   if (ingestBtn) ingestBtn.addEventListener('click', triggerIngest);
   if (statsBtn) statsBtn.addEventListener('click', loadIngestStats);
   if (coverageBtn) coverageBtn.addEventListener('click', loadCoverage);
   if (deleteBtn) deleteBtn.addEventListener('click', runDelete);
+  if (quotaBtn) quotaBtn.addEventListener('click', loadQuotaStatus);
+  if (quotaResetBtn) quotaResetBtn.addEventListener('click', resetQuota);
 }
 
+// Load quota status on page load
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', attachButtonListeners);
+  document.addEventListener('DOMContentLoaded', () => {
+    attachButtonListeners();
+    loadQuotaStatus();
+  });
 } else {
-  // DOM already loaded, attach immediately
   attachButtonListeners();
+  loadQuotaStatus();
 }
+
 </script>
 </body>
 </html>

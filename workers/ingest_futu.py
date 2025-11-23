@@ -20,6 +20,7 @@ import pandas as pd
 from futu import OpenQuoteContext, RET_OK, KLType
 
 from app.settings import get_settings
+from app.futu_rate_limit import rate_limit
 
 settings = get_settings()
 
@@ -82,6 +83,7 @@ def _fetch_with_request_history(ctx: OpenQuoteContext, symbol: str, start: str, 
     frames: list[pd.DataFrame] = []
     page_req_key = None
     while True:
+        rate_limit()  # Rate limit before each API call
         ret, df, page_req_key = ctx.request_history_kline(
             code=symbol,
             start=start,
@@ -105,6 +107,7 @@ def _fetch_with_request_history(ctx: OpenQuoteContext, symbol: str, start: str, 
 
 
 def _fetch_with_legacy(ctx: OpenQuoteContext, symbol: str, start: str, end: str) -> pd.DataFrame:
+    rate_limit()  # Rate limit before each API call
     ret, df = ctx.get_history_kline(
         code=symbol,
         start=start,
