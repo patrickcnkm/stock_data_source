@@ -155,6 +155,14 @@ def _fetch_one_day_ticks(ctx: OpenQuoteContext, symbol: str, day: datetime) -> p
 
     # Transform to staging table format
     ts_exchange = pd.to_datetime(df_all["time_key"])
+    day_start = pd.Timestamp(day.date())
+    day_end = day_start + timedelta(days=1)
+    mask = (ts_exchange >= day_start) & (ts_exchange < day_end)
+    if not mask.any():
+        return pd.DataFrame()
+    df_all = df_all.loc[mask].copy().reset_index(drop=True)
+    ts_exchange = ts_exchange[mask].reset_index(drop=True)
+
     out = pd.DataFrame({
         "src": ["futu"] * len(df_all),
         "std_symbol": [futu_symbol] * len(df_all),  # Store normalized symbol (HK.00700 format)
@@ -169,7 +177,23 @@ def _fetch_one_day_ticks(ctx: OpenQuoteContext, symbol: str, day: datetime) -> p
     return out
 
 
-def ingest_symbols(symbols: List[str], days: int):
+def _resolve_date_range(days: int, start_date: date | None, end_date: date | None) -> tuple[date, date]:
+    today = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+    if start_date and end_date:
+        if end_date > yesterday:
+            end_date = yesterday
+        if start_date > end_date:
+            raise ValueError("start_date must be <= end_date")
+        return start_date, end_date
+    target_end = yesterday
+    if days <= 0:
+        raise ValueError("days must be > 0")
+    target_start = yesterday - timedelta(days=days - 1)
+    return target_start, target_end
+
+
+def ingest_symbols(symbols: List[str], days: int, start_date: date | None = None, end_date: date | None = None):
     conn = _connect_duck()
     _ensure_table(conn)
 
@@ -180,25 +204,27 @@ def ingest_symbols(symbols: List[str], days: int):
 
     try:
         today = datetime.now().date()
-        # For workers, "days" means days back from yesterday (not including today)
-        # So days=1 means yesterday only
         yesterday = today - timedelta(days=1)
-        start_day = yesterday - timedelta(days=days - 1)
+        target_start, target_end = _resolve_date_range(days, start_date, end_date)
+        explicit_range = start_date is not None and end_date is not None
 
         # Normalize all symbols to Futu format for consistency
         normalized_symbols = [_normalize_symbol(s) for s in symbols]
 
         for sym in normalized_symbols:
             latest = _latest_trade_date(conn, sym)
-            if latest is not None and latest >= start_day:
-                start_for_sym = latest + timedelta(days=1)
-            else:
-                start_for_sym = start_day
+            start_for_sym = target_start
+            if not explicit_range and latest is not None and latest >= target_start:
+                candidate = latest + timedelta(days=1)
+                if candidate > target_end:
+                    print(f"[ingest_futu] symbol={sym} already ingested through {latest}, skipping")
+                    continue
+                start_for_sym = candidate
 
-            print(f"[ingest_futu] symbol={sym}, from={start_for_sym} to={yesterday}")
+            print(f"[ingest_futu] symbol={sym}, from={start_for_sym} to={target_end}")
 
             cur_day = datetime.combine(start_for_sym, datetime.min.time())
-            end_day = datetime.combine(yesterday, datetime.min.time())
+            end_day = datetime.combine(target_end, datetime.min.time())
 
             while cur_day <= end_day:
                 df = _fetch_one_day_ticks(ctx, sym, cur_day)
@@ -230,9 +256,16 @@ def main():
     ap.add_argument("--symbols", nargs="+", required=True)
     ap.add_argument("--days", type=int, default=2,
                     help="向前回溯的天数（含今天），默认 2 天")
+    ap.add_argument("--start-date", type=str, default=None,
+                    help="起始交易日 (YYYY-MM-DD)，与 --end-date 搭配使用")
+    ap.add_argument("--end-date", type=str, default=None,
+                    help="结束交易日 (YYYY-MM-DD)")
     args = ap.parse_args()
 
-    ingest_symbols(args.symbols, args.days)
+    start_date = date.fromisoformat(args.start_date) if args.start_date else None
+    end_date = date.fromisoformat(args.end_date) if args.end_date else None
+
+    ingest_symbols(args.symbols, args.days, start_date=start_date, end_date=end_date)
 
 
 if __name__ == "__main__":
