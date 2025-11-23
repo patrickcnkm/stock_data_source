@@ -443,6 +443,60 @@ def coverage_day_details(trade_date: date):
     }
 
 
+@router.get("/api/dashboard/ingest/stats")
+def ingest_day_stats(trade_date: date):
+    """Return ingestion/validation stats for a given trade date."""
+    try:
+        with get_duck(read_only=True) as duck:
+            trusted_df = duck.execute(
+                f"""
+                SELECT COUNT(DISTINCT std_symbol) AS symbol_count
+                FROM {TICKS_TABLE}
+                WHERE date_trunc('day', ts_exchange) = ?
+                """,
+                [trade_date],
+            ).fetch_df()
+
+            validation_df = duck.execute(
+                """
+                SELECT std_symbol, rule_name, passed
+                FROM validation_results
+                WHERE file_date = ?
+                """,
+                [trade_date],
+            ).fetch_df()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB error: {e}")
+
+    trusted_symbol_count = int(trusted_df["symbol_count"][0]) if not trusted_df.empty else 0
+
+    processed_symbols: set[str] = set(validation_df["std_symbol"].tolist()) if not validation_df.empty else set()
+    failed_df = validation_df[validation_df["passed"] == False] if not validation_df.empty else validation_df
+    failed_symbols: set[str] = set(failed_df["std_symbol"].tolist()) if not failed_df.empty else set()
+    passed_symbols = processed_symbols - failed_symbols
+
+    error_breakdown = []
+    if not failed_df.empty:
+        for rule_name, group in failed_df.groupby("rule_name"):
+            error_breakdown.append(
+                {
+                    "rule_name": rule_name,
+                    "failed_symbols": sorted(set(group["std_symbol"].tolist())),
+                    "failed_symbol_count": int(len(set(group["std_symbol"].tolist()))),
+                }
+            )
+
+    return {
+        "trade_date": trade_date.isoformat(),
+        "trusted_symbol_count": trusted_symbol_count,
+        "processed_symbol_count": len(processed_symbols),
+        "passed_symbol_count": len(passed_symbols),
+        "failed_symbol_count": len(failed_symbols),
+        "failed_symbols": sorted(failed_symbols),
+        "error_breakdown": error_breakdown,
+    }
+
+
 # ============================
 # 3) Delete endpoint
 # ============================
@@ -531,6 +585,30 @@ def dashboard_page():
     input, select, textarea { font-size: 13px; padding: 2px 4px; }
     label { font-size: 13px; }
     .flex-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .progress {
+      width: 100%;
+      background: #e5e7eb;
+      border-radius: 6px;
+      overflow: hidden;
+      height: 14px;
+      margin-top: 8px;
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #2563eb, #4ade80);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .progress-label { font-size: 12px; color: #374151; margin-top: 4px; }
+    .error-chip {
+      display: inline-block;
+      padding: 2px 6px;
+      background: #fee2e2;
+      color: #b91c1c;
+      border-radius: 4px;
+      margin: 2px 4px 2px 0;
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
@@ -568,9 +646,15 @@ def dashboard_page():
 
     <div style="margin-top: 8px;">
       <button class="btn btn-primary" onclick="triggerIngest()">Run Ingestion + Verification</button>
+      <button class="btn btn-secondary" onclick="loadIngestStats()">Load Ingestion Stats</button>
     </div>
   </fieldset>
+  <div class="progress" aria-label="Ingestion progress">
+    <div id="ingest-progress-bar" class="progress-bar"></div>
+  </div>
+  <div id="ingest-progress-text" class="progress-label">Idle</div>
   <pre id="ingest-log">[Ready]</pre>
+  <div id="ingest-stats" style="font-size: 13px; margin-top: 8px;"></div>
 
   <!-- 2. Coverage Overview -->
   <h2>2. Ingested Data Overview</h2>
@@ -644,6 +728,7 @@ async function triggerIngest() {
 
   const log = document.getElementById('ingest-log');
   log.textContent = '[Running] Sending request...';
+  setIngestProgress(10, 'Starting pipeline...');
 
   try {
     const res = await fetch('/api/dashboard/ingest', {
@@ -651,10 +736,69 @@ async function triggerIngest() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body)
     });
+    setIngestProgress(35, 'Pipeline running...');
     const data = await res.json();
     log.textContent = JSON.stringify(data, null, 2);
+
+    // Update progress based on completed steps
+    const steps = data.steps || [];
+    if (steps.length) {
+      const completed = steps.filter(s => s.status === 'ok').length;
+      const pct = Math.max(35, Math.round((completed / steps.length) * 100));
+      const label = data.status === 'success' ? 'Completed' : data.status === 'partial_success' ? 'Partial commit' : 'Completed with validation failures';
+      setIngestProgress(pct, label);
+    } else {
+      setIngestProgress(100, 'Completed');
+    }
+
+    const targetDate = data.plan?.effective_range?.to || end || start;
+    if (targetDate) {
+      await loadIngestStats(targetDate);
+    }
   } catch (e) {
     log.textContent = 'Error: ' + e;
+    setIngestProgress(0, 'Error running pipeline');
+  }
+}
+
+function setIngestProgress(percent, label) {
+  const bar = document.getElementById('ingest-progress-bar');
+  const text = document.getElementById('ingest-progress-text');
+  bar.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+  text.textContent = label;
+}
+
+async function loadIngestStats(tradeDateOverride) {
+  const statsDiv = document.getElementById('ingest-stats');
+  const date = tradeDateOverride || document.getElementById('ingest-end').value;
+  if (!date) {
+    statsDiv.textContent = 'Select a date to load ingestion stats.';
+    return;
+  }
+
+  statsDiv.textContent = 'Loading ingestion stats...';
+
+  try {
+    const res = await fetch(`/api/dashboard/ingest/stats?trade_date=${date}`);
+    const data = await res.json();
+
+    const errors = data.error_breakdown || [];
+    const errorHtml = errors.length
+      ? errors.map(e => `<div class="error-chip">${e.rule_name}: ${e.failed_symbol_count} symbol(s)</div>`).join('')
+      : '<span style="color:#16a34a">No validation errors recorded.</span>';
+
+    statsDiv.innerHTML = `
+      <div><b>${data.trade_date}</b> ingestion</div>
+      <ul style="margin-top:4px;">
+        <li>Distinct symbols committed: <b>${data.trusted_symbol_count}</b></li>
+        <li>Symbols processed (validated): <b>${data.processed_symbol_count}</b></li>
+        <li>Passed verification: <b>${data.passed_symbol_count}</b></li>
+        <li>Failed verification: <b>${data.failed_symbol_count}</b></li>
+      </ul>
+      <div style="margin-top:4px;">Error breakdown: ${errorHtml}</div>
+    `;
+  } catch (e) {
+    statsDiv.textContent = 'Error loading ingestion stats: ' + e;
   }
 }
 
