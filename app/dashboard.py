@@ -646,8 +646,8 @@ def dashboard_page():
     </div>
 
     <div style="margin-top: 8px;">
-      <button class="btn btn-primary" onclick="triggerIngest()">Run Ingestion + Verification</button>
-      <button class="btn btn-secondary" onclick="loadIngestStats()">Load Ingestion Stats</button>
+      <button id="btn-ingest" type="button" class="btn btn-primary" onclick="triggerIngest()">Run Ingestion + Verification</button>
+      <button id="btn-stats" type="button" class="btn btn-secondary" onclick="loadIngestStats()">Load Ingestion Stats</button>
     </div>
   </fieldset>
   <div class="progress" aria-label="Ingestion progress">
@@ -659,7 +659,7 @@ def dashboard_page():
 
   <!-- 2. Coverage Overview -->
   <h2>2. Ingested Data Overview</h2>
-  <button class="btn btn-secondary" onclick="loadCoverage()">Reload Coverage</button>
+  <button id="btn-coverage" type="button" class="btn btn-secondary" onclick="loadCoverage()">Reload Coverage</button>
   <div id="coverage-summary" style="margin-top: 8px; font-size: 13px;"></div>
   <div id="coverage-table-wrapper" style="margin-top: 8px;"></div>
 
@@ -678,7 +678,7 @@ def dashboard_page():
       <input type="date" id="del-end" />
     </div>
     <div style="margin-top: 8px;">
-      <button class="btn btn-danger" onclick="runDelete()">Delete</button>
+      <button id="btn-delete" type="button" class="btn btn-danger" onclick="runDelete()">Delete</button>
     </div>
   </fieldset>
   <pre id="delete-log">[No delete run]</pre>
@@ -693,7 +693,8 @@ def dashboard_page():
   document.getElementById('ingest-end').value = dateStr;
 })();
 
-async function triggerIngest() {
+// Ensure functions are globally accessible
+window.triggerIngest = async function triggerIngest() {
   const mode = document.querySelector('input[name="mode"]:checked').value;
   const symbolsRaw = document.getElementById('ingest-symbols').value.trim();
   const start = document.getElementById('ingest-start').value;
@@ -740,7 +741,6 @@ async function triggerIngest() {
     setIngestProgress(35, 'Pipeline running...');
     const data = await res.json();
     log.textContent = JSON.stringify(data, null, 2);
-<<<<<<< HEAD
 
     // Update progress based on completed steps
     const steps = data.steps || [];
@@ -753,27 +753,22 @@ async function triggerIngest() {
       setIngestProgress(100, 'Completed');
     }
 
-    const targetDate = data.plan?.effective_range?.to || end || start;
-    if (targetDate) {
-      await loadIngestStats(targetDate);
-    }
-=======
+    // Reload coverage after successful ingestion
     await loadCoverage();
->>>>>>> main
   } catch (e) {
     log.textContent = 'Error: ' + e;
     setIngestProgress(0, 'Error running pipeline');
   }
-}
+};
 
-function setIngestProgress(percent, label) {
+window.setIngestProgress = function setIngestProgress(percent, label) {
   const bar = document.getElementById('ingest-progress-bar');
   const text = document.getElementById('ingest-progress-text');
   bar.style.width = `${Math.min(100, Math.max(0, percent))}%`;
   text.textContent = label;
-}
+};
 
-async function loadIngestStats(tradeDateOverride) {
+window.loadIngestStats = async function loadIngestStats(tradeDateOverride) {
   const statsDiv = document.getElementById('ingest-stats');
   const date = tradeDateOverride || document.getElementById('ingest-end').value;
   if (!date) {
@@ -805,9 +800,9 @@ async function loadIngestStats(tradeDateOverride) {
   } catch (e) {
     statsDiv.textContent = 'Error loading ingestion stats: ' + e;
   }
-}
+};
 
-async function loadCoverage() {
+window.loadCoverage = async function loadCoverage() {
   const summaryDiv = document.getElementById('coverage-summary');
   const tableDiv = document.getElementById('coverage-table-wrapper');
   summaryDiv.textContent = 'Loading...';
@@ -847,9 +842,9 @@ async function loadCoverage() {
   } catch (e) {
     summaryDiv.textContent = 'Error loading coverage: ' + e;
   }
-}
+};
 
-async function runDelete() {
+window.runDelete = async function runDelete() {
   const symbolsRaw = document.getElementById('del-symbols').value.trim();
   const start = document.getElementById('del-start').value;
   const end = document.getElementById('del-end').value;
@@ -877,6 +872,26 @@ async function runDelete() {
   } catch (e) {
     log.textContent = 'Error: ' + e;
   }
+}
+
+// Attach event listeners when DOM is ready (backup to onclick handlers)
+function attachButtonListeners() {
+  const ingestBtn = document.getElementById('btn-ingest');
+  const statsBtn = document.getElementById('btn-stats');
+  const coverageBtn = document.getElementById('btn-coverage');
+  const deleteBtn = document.getElementById('btn-delete');
+  
+  if (ingestBtn) ingestBtn.addEventListener('click', triggerIngest);
+  if (statsBtn) statsBtn.addEventListener('click', loadIngestStats);
+  if (coverageBtn) coverageBtn.addEventListener('click', loadCoverage);
+  if (deleteBtn) deleteBtn.addEventListener('click', runDelete);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', attachButtonListeners);
+} else {
+  // DOM already loaded, attach immediately
+  attachButtonListeners();
 }
 </script>
 </body>
