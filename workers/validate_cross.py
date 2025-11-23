@@ -52,10 +52,27 @@ def compare_bars(left: pd.DataFrame, right: pd.DataFrame):
     }
     return res
 
+def _build_date_list(days: int, start_date: date | None, end_date: date | None) -> list[str]:
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    if start_date and end_date:
+        if end_date > yesterday:
+            end_date = yesterday
+        if start_date > end_date:
+            raise ValueError("start_date must be <= end_date")
+        count = (end_date - start_date).days + 1
+        return [(start_date + timedelta(days=i)).isoformat() for i in range(count)]
+    if days <= 0:
+        raise ValueError("days must be > 0")
+    return [(yesterday - timedelta(days=i)).isoformat() for i in range(days)]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--symbols', nargs='+', required=True)
     ap.add_argument('--days', type=int, default=2)
+    ap.add_argument('--start-date', type=str, default=None)
+    ap.add_argument('--end-date', type=str, default=None)
     ap.add_argument('--demo', action='store_true', help='Use futu 1m vs futu 1m (self-check) as placeholder')
     args = ap.parse_args()
 
@@ -63,8 +80,9 @@ def main():
     # This avoids conflicts with the API server which uses read-only connections
     settings = get_settings()
     con = duckdb.connect(settings.duckdb_path, read_only=False)
-    end = date.today()
-    dates = [ (end - timedelta(days=i+1)).isoformat() for i in range(args.days) ]
+    start_date = date.fromisoformat(args.start_date) if args.start_date else None
+    end_date = date.fromisoformat(args.end_date) if args.end_date else None
+    dates = _build_date_list(args.days, start_date, end_date)
 
     for s in args.symbols:
         # Normalize symbol before processing

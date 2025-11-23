@@ -192,6 +192,7 @@ def dashboard_ingest(req: IngestRequest):
             "to": effective_end.isoformat(),
         },
     }
+    date_args = ["--start-date", effective_start.isoformat(), "--end-date", effective_end.isoformat()]
 
     steps_log = []
 
@@ -237,19 +238,19 @@ def dashboard_ingest(req: IngestRequest):
     # 1) ingest_futu
     run_step(
         "ingest_futu",
-        ["python", "-m", "workers.ingest_futu", "--symbols", *symbols, "--days", str(days)],
+        ["python", "-m", "workers.ingest_futu", "--symbols", *symbols, *date_args],
     )
 
     # 2) validate A (vertical)
     run_step(
         "validate_A",
-        ["python", "-m", "workers.validate", "--run-a", "--symbols", *symbols, "--days", str(days)],
+        ["python", "-m", "workers.validate", "--run-a", "--symbols", *symbols, *date_args],
     )
 
     # 3) validate B (horizontal, demo mode)
     run_step(
         "validate_B_demo",
-        ["python", "-m", "workers.validate_cross", "--symbols", *symbols, "--days", str(days), "--demo"],
+        ["python", "-m", "workers.validate_cross", "--symbols", *symbols, *date_args, "--demo"],
     )
 
     # 4) Check validation_results: any failures? if yes -> DO NOT commit
@@ -320,7 +321,7 @@ def dashboard_ingest(req: IngestRequest):
     # 5) No failures -> commit staging → trusted
     run_step(
         "commit",
-        ["python", "-m", "workers.commit", "--symbols", *symbols_to_commit, "--days", str(days)],
+        ["python", "-m", "workers.commit", "--symbols", *symbols_to_commit, *date_args],
     )
 
     return {
@@ -653,6 +654,7 @@ async function triggerIngest() {
     });
     const data = await res.json();
     log.textContent = JSON.stringify(data, null, 2);
+    await loadCoverage();
   } catch (e) {
     log.textContent = 'Error: ' + e;
   }
