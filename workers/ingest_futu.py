@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 import argparse
+import time
 from datetime import date, datetime, timedelta
 from typing import List
 
@@ -25,8 +26,39 @@ from app.futu_rate_limit import rate_limit
 settings = get_settings()
 
 
-def _connect_duck():
-    return duckdb.connect(settings.duckdb_path)
+def _connect_duck(max_retries: int = 5, retry_delay: float = 1.0):
+    """
+    Connect to DuckDB with retry logic for lock conflicts.
+    
+    DuckDB doesn't support concurrent write connections, so if another
+    process is holding a lock, we retry with exponential backoff.
+    """
+    for attempt in range(max_retries):
+        try:
+            return duckdb.connect(settings.duckdb_path)
+        except Exception as e:
+            if "lock" in str(e).lower() or "conflicting" in str(e).lower():
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    print(f"[ingest_futu] Database lock detected, retrying in {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    error_msg = (
+                        f"Could not acquire database lock after {max_retries} attempts.\n"
+                        "This usually means another process is using the database.\n"
+                        "Possible solutions:\n"
+                        "  1. Wait a few seconds and try again (another ingestion may be running)\n"
+                        "  2. Check for other Python processes using the database:\n"
+                        "     ps aux | grep -i python | grep -i duck\n"
+                        "  3. If a process is stuck, you may need to kill it:\n"
+                        "     kill <PID> (use the PID from the error message above)\n"
+                        f"  4. As a last resort, delete the lock file (if it exists):\n"
+                        f"     rm -f {settings.duckdb_path}.wal.lock"
+                    )
+                    raise RuntimeError(error_msg) from e
+            raise
+    raise RuntimeError("Failed to connect to database")
 
 
 def _ensure_table(conn: duckdb.DuckDBPyConnection):
@@ -197,15 +229,16 @@ def _resolve_date_range(days: int, start_date: date | None, end_date: date | Non
 
 
 def ingest_symbols(symbols: List[str], days: int, start_date: date | None = None, end_date: date | None = None):
-    conn = _connect_duck()
-    _ensure_table(conn)
-
-    ctx = OpenQuoteContext(
-        host=settings.futu_opend_ip,
-        port=settings.futu_opend_quote_port,
-    )
-
+    conn = None
+    ctx = None
     try:
+        conn = _connect_duck()
+        _ensure_table(conn)
+
+        ctx = OpenQuoteContext(
+            host=settings.futu_opend_ip,
+            port=settings.futu_opend_quote_port,
+        )
         today = datetime.now().date()
         yesterday = today - timedelta(days=1)
         target_start, target_end = _resolve_date_range(days, start_date, end_date)
@@ -250,8 +283,17 @@ def ingest_symbols(symbols: List[str], days: int, start_date: date | None = None
                 cur_day += timedelta(days=1)
 
     finally:
-        ctx.close()
-        conn.close()
+        # Ensure connections are closed even if errors occur
+        if ctx is not None:
+            try:
+                ctx.close()
+            except Exception as e:
+                print(f"[ingest_futu] Warning: Error closing Futu context: {e}")
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as e:
+                print(f"[ingest_futu] Warning: Error closing database connection: {e}")
 
 
 def main():

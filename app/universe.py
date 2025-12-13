@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List
 
+import pandas as pd
+
 from fastapi import HTTPException
-from futu import Market, OpenQuoteContext, RET_OK, SecurityType
 
 from .settings import get_settings
 from .futu_rate_limit import rate_limit
@@ -55,6 +56,9 @@ def _write_cache(symbols: List[str]) -> None:
 
 
 def _fetch_hk_universe_from_futu(settings) -> List[str]:
+    # Lazy import to avoid iCloud Drive permission issues
+    from futu import Market, OpenQuoteContext, RET_OK, SecurityType
+    
     ctx = OpenQuoteContext(host=settings.futu_opend_ip, port=settings.futu_opend_quote_port)
     try:
         rate_limit()  # Rate limit before API call
@@ -147,4 +151,121 @@ def load_hk_universe(force_refresh: bool = False) -> List[str]:
             detail="Unable to determine HK universe symbols and no overrides were supplied.",
         )
     return merged
+
+
+def load_hk_stocks_from_watchlist() -> List[str]:
+    """
+    Load HK stocks from Futu OpenD watchlist (favorite stocks).
+    
+    This function reads watchlist stocks using get_user_security() and filters
+    for HK stocks with stock_type = "STOCK", similar to futu_web_viewer.py logic.
+    
+    Returns:
+        List of normalized HK stock symbols (e.g., ["HK.00700", "HK.00005"])
+    
+    Raises:
+        HTTPException: If connection fails or no HK stocks found in watchlist
+    """
+    # Lazy import to avoid iCloud Drive permission issues
+    from futu import OpenQuoteContext, RET_OK
+    
+    settings = get_settings()
+    favorite_stocks = []
+    
+    ctx = None
+    try:
+        rate_limit()  # Rate limit before API call
+        ctx = OpenQuoteContext(host=settings.futu_opend_ip, port=settings.futu_opend_quote_port)
+        
+        # Try to get all watchlist groups
+        # According to Futu API docs: '全部' (Chinese for "All") = all stocks, 
+        # 'HK' = HK stocks, 'US' = US stocks, etc.
+        watchlist_groups = ['全部', 'HK', 'US', 'CN']  # Try 全部 (All) first, then specific markets
+        
+        for group in watchlist_groups:
+            try:
+                rate_limit()  # Rate limit for each API call
+                ret, fav_data = ctx.get_user_security(group)
+                if ret == RET_OK:
+                    # Handle DataFrame response (standard format)
+                    if isinstance(fav_data, pd.DataFrame):
+                        if len(fav_data) > 0:
+                            for idx, row in fav_data.iterrows():
+                                stock_code = row.get('code', '')
+                                if pd.notna(stock_code) and stock_code:
+                                    # Check if we already have this stock (avoid duplicates)
+                                    code_str = str(stock_code).strip()
+                                    normalized = _normalize_symbol(code_str)
+                                    if normalized and not any(s['code'] == normalized for s in favorite_stocks):
+                                        favorite_stocks.append({
+                                            'code': normalized,
+                                            'name': str(row.get('name', 'N/A')),
+                                            'market': group if group != '全部' else 'MIXED',
+                                            'sec_type': str(row.get('stock_type', row.get('sec_type', 'STOCK')))
+                                        })
+                    elif isinstance(fav_data, dict):
+                        stock_list = fav_data.get('data', [])
+                        if not stock_list and 'code' in fav_data:
+                            stock_list = [fav_data]
+                        
+                        for stock in stock_list:
+                            if isinstance(stock, dict):
+                                stock_code = stock.get('code', '')
+                                if stock_code:
+                                    code_str = str(stock_code).strip()
+                                    normalized = _normalize_symbol(code_str)
+                                    if normalized and not any(s['code'] == normalized for s in favorite_stocks):
+                                        favorite_stocks.append({
+                                            'code': normalized,
+                                            'name': stock.get('name', 'N/A'),
+                                            'market': group if group != '全部' else 'MIXED',
+                                            'sec_type': stock.get('sec_type', 'STOCK')
+                                        })
+                    
+                    # If we got '全部' group successfully, we don't need to check other groups
+                    if group == '全部' and len(favorite_stocks) > 0:
+                        break
+                        
+            except Exception as e:
+                # Continue to next group if one fails
+                continue
+        
+        # Filter to only HK stocks with stock type = "STOCK"
+        hk_stocks = []
+        for stock in favorite_stocks:
+            code = stock.get('code', '')
+            market = stock.get('market', '')
+            sec_type = stock.get('sec_type', '').upper()
+            
+            # Check if it's an HK stock: code starts with 'HK.' or market is 'HK'
+            is_hk = code.startswith('HK.') or market == 'HK' or (market == 'MIXED' and code.startswith('HK.'))
+            
+            # Check if stock type is "STOCK"
+            is_stock_type = sec_type == 'STOCK'
+            
+            if is_hk and is_stock_type:
+                hk_stocks.append(code)
+        
+        if not hk_stocks:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No HK stocks (type=STOCK) found in Futu watchlist. "
+                    "Please add HK stocks to your watchlist in Futu OpenD."
+                ),
+            )
+        
+        # Sort for consistency
+        return sorted(hk_stocks)
+        
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load HK stocks from Futu watchlist: {exc}",
+        )
+    finally:
+        if ctx:
+            ctx.close()
 
