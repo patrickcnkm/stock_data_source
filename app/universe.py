@@ -174,7 +174,6 @@ def load_hk_stocks_from_watchlist() -> List[str]:
     
     ctx = None
     try:
-        rate_limit()  # Rate limit before API call
         ctx = OpenQuoteContext(host=settings.futu_opend_ip, port=settings.futu_opend_quote_port)
         
         # Try to get all watchlist groups

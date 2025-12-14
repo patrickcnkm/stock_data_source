@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import subprocess
 from datetime import date, datetime, timedelta
-import math
 from typing import List, Optional, Literal
 
 import duckdb
@@ -115,10 +114,10 @@ def dashboard_ingest(req: IngestRequest):
     elif req.mode == "full_last_60d":
         # Load HK stocks from watchlist
         symbols = load_hk_stocks_from_watchlist()
-        # Last 60 days
+        # Last 60 days (inclusive): from yesterday back 59 days = 60 days total
         days = 60
         effective_end = yesterday
-        effective_start = today - timedelta(days=days)
+        effective_start = yesterday - timedelta(days=59)  # yesterday - 59 days = 60 days total
     elif req.mode == "full_range":
         # Load HK stocks from watchlist
         symbols = load_hk_stocks_from_watchlist()
