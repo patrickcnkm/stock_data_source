@@ -166,8 +166,8 @@ def dashboard_ingest(req: IngestRequest):
     # safety cap to avoid huge backfill
     if days > 60:
         days = 60
-        effective_start = today - timedelta(days=days)
         effective_end = yesterday
+        effective_start = yesterday - timedelta(days=days - 1)  # Match worker's _resolve_date_range logic: yesterday - (days-1) = days total
 
     plan = {
         "mode": req.mode,
