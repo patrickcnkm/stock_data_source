@@ -122,15 +122,18 @@ def rate_limit():
             )
         
         # Enforce minimum interval between requests
+        sleep_time = 0.0
         if _request_times:
             last_request = _request_times[-1]
             elapsed = current_time - last_request
             if elapsed < _MIN_REQUEST_INTERVAL:
                 sleep_time = _MIN_REQUEST_INTERVAL - elapsed
-                time.sleep(sleep_time)
-                current_time = time.time()
         
-        # Record this request
+        # Record this request (before releasing lock to ensure atomicity)
         _request_times.append(current_time)
         _total_requests += 1
+    
+    # Release lock before sleeping to avoid blocking other threads
+    if sleep_time > 0:
+        time.sleep(sleep_time)
 

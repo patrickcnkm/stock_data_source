@@ -226,8 +226,12 @@ def load_hk_stocks_from_watchlist() -> List[str]:
                     if group == '全部' and len(favorite_stocks) > 0:
                         break
                         
+            except RuntimeError as e:
+                # RuntimeError from rate_limit() means quota exceeded - don't mask this error
+                # Re-raise it so it propagates to the outer handler
+                raise
             except Exception as e:
-                # Continue to next group if one fails
+                # Continue to next group for other errors (network issues, API errors, etc.)
                 continue
         
         # Filter to only HK stocks with stock type = "STOCK"
