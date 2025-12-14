@@ -111,6 +111,7 @@ def rate_limit():
         if time_since_reset >= _AUTO_RESET_INTERVAL:
             _total_requests = 0
             _quota_reset_time = current_time
+            time_since_reset = 0  # Reset time_since_reset after auto-reset
         
         # Check total quota limit
         if _total_requests >= MAX_TOTAL_QUOTA:

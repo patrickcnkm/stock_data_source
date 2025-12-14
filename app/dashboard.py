@@ -927,8 +927,28 @@ window.loadIngestStats = async function loadIngestStats(tradeDateOverride) {
     const url = `/api/dashboard/ingest/stats?trade_date=${date}`;
     console.log('[DEBUG] Request URL:', url);
     const res = await fetch(url);
-    console.log('[DEBUG] Response status:', res.status);
-    const data = await res.json();
+    console.log('[DEBUG] Response status:', res.status, res.statusText);
+    
+    // Harden response parsing: handle non-JSON responses gracefully
+    let data;
+    const responseText = await res.text();
+    console.log('[DEBUG] Response text received (first 500 chars):', responseText.substring(0, 500));
+    
+    if (!res.ok) {
+      // HTTP error (4xx, 5xx)
+      try {
+        const errorData = JSON.parse(responseText);
+        throw new Error(errorData.detail || errorData.message || `HTTP ${res.status}: ${res.statusText}`);
+      } catch (parseError) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}. Response: ${responseText.substring(0, 200)}`);
+      }
+    }
+    
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      throw new Error(`Invalid JSON response: ${parseError.message}. Response: ${responseText.substring(0, 200)}`);
+    }
     console.log('[DEBUG] Stats data received:', data);
 
     const errors = data.error_breakdown || [];
