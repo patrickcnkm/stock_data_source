@@ -16,8 +16,82 @@ This is a minimal runnable skeleton of the Quant Data Platform:
 - Redis (running locally on port 6379, optional)
 - DuckDB (installed via requirements.txt)
 - Futu OpenD application (for real-time data ingestion, optional - can use demo mode)
+- Docker Desktop (for Prometheus/Grafana monitoring services, optional)
+
+## Docker Setup (Optional - for Monitoring Services)
+
+The project includes Docker Compose configuration for Prometheus and Grafana monitoring services. If you encounter issues pulling Docker images, you may need to configure proxy settings.
+
+### Docker Proxy Configuration (macOS with VPN/Proxy)
+
+If you're using a VPN or proxy tool (e.g., Clash Verge) and Docker image pulls fail with errors like:
+- `context deadline exceeded`
+- `connect: connection refused`
+- `Docker Desktop has no HTTPS proxy`
+
+**Root Cause**: Docker Desktop runs containers in a Linux VM that bypasses macOS system proxy settings. Docker traffic must be explicitly routed through your proxy.
+
+**Solution**: Configure Docker Desktop to use your proxy:
+
+1. Open **Docker Desktop → Settings → Resources → Proxies**
+2. Enable **Manual proxy configuration**
+3. Configure:
+   - **HTTP Proxy**: `http://127.0.0.1:<your-proxy-port>` (e.g., `http://127.0.0.1:7897` for Clash Verge Mixed Port)
+   - **HTTPS Proxy**: Same as HTTP Proxy
+   - **Bypass**: `localhost,127.0.0.1,.local`
+4. Click **Apply & Restart**
+
+**For Clash Verge users**:
+- Find your **Mixed Port** (typically `7897`) in Clash Verge settings
+- Use that port in Docker proxy configuration
+- Alternative: Enable **TUN mode** in Clash Verge (no Docker proxy needed)
+
+**Verification**:
+```bash
+docker pull hello-world
+docker-compose up -d
+```
+
+If successful, services will be available at:
+- **Grafana**: http://localhost:3000
+- **Prometheus**: http://localhost:9090
+
+See `Docker_Desktop_Proxy_Troubleshooting_Report.md` for detailed troubleshooting steps.
 
 ## Quickstart
+
+### Option 1: One-Command Startup (Recommended)
+
+Use the provided startup script to start all services automatically:
+
+```bash
+./start.sh
+```
+
+This script will:
+- Check prerequisites (Python, Docker)
+- Create virtual environment if needed
+- Install/update dependencies
+- Initialize database if needed
+- Start Docker services (Prometheus/Grafana)
+- Start FastAPI server
+- Display service URLs and status
+
+Press `Ctrl+C` to stop all services gracefully.
+
+**To stop all services manually:**
+
+```bash
+./stop.sh
+```
+
+This script will:
+- Stop FastAPI server (kills process on port 8000)
+- Stop Docker services (Prometheus/Grafana)
+- Verify all services are stopped
+- Display status summary
+
+### Option 2: Manual Setup
 
 ```bash
 # 1. Create virtual environment and install dependencies
@@ -35,13 +109,18 @@ python scripts/seed_demo.py         # creates 2-day mock ticks CSVs
 
 # 5. Start the FastAPI server
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 6. (Optional) Start Docker services for monitoring (Prometheus/Grafana)
+docker-compose up -d
 ```
 
 Then visit:
 - **Dashboard**: http://localhost:8000/dashboard - Interactive web UI for ingestion and monitoring
 - API docs: http://localhost:8000/docs
 - Health check: http://localhost:8000/api/health
-- Prometheus: http://localhost:8000/metrics
+- Prometheus metrics: http://localhost:8000/metrics (FastAPI metrics endpoint)
+- **Grafana** (if Docker services running): http://localhost:3000 - Pre-configured dashboards
+- **Prometheus** (if Docker services running): http://localhost:9090 - Metrics collection and querying
 
 ## Mock Ingest (2-day demo)
 

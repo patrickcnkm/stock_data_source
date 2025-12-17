@@ -85,9 +85,12 @@ def rate_limit():
     - Max 60 requests per 30 seconds
     - Max 300 total requests (until reset)
     
-    Raises RuntimeError if quota exceeded.
+    Automatically waits if rate limit is reached instead of raising an error.
+    This allows the ingestion process to continue smoothly while respecting rate limits.
     """
     global _total_requests, _request_times, _quota_reset_time
+    
+    wait_time = 0.0
     
     with _lock:
         current_time = time.time()
@@ -96,15 +99,14 @@ def rate_limit():
         while _request_times and current_time - _request_times[0] > 30:
             _request_times.popleft()
         
-        # Check 30-second window limit
+        # Check 30-second window limit - wait if needed instead of raising error
         if len(_request_times) >= MAX_REQUESTS_PER_30S:
             oldest_request = _request_times[0]
             wait_time = 30 - (current_time - oldest_request) + 0.1  # Add small buffer
             if wait_time > 0:
-                raise RuntimeError(
-                    f"Futu API rate limit exceeded: {MAX_REQUESTS_PER_30S} requests per 30 seconds. "
-                    f"Wait {wait_time:.1f} seconds before retrying."
-                )
+                # Instead of raising, we'll wait and then continue
+                print(f"[futu_rate_limit] Rate limit reached ({MAX_REQUESTS_PER_30S} requests in 30s). "
+                      f"Waiting {wait_time:.1f} seconds...")
         
         # Auto-reset if 24 hours have passed
         time_since_reset = current_time - _quota_reset_time
@@ -113,7 +115,7 @@ def rate_limit():
             _quota_reset_time = current_time
             time_since_reset = 0  # Reset time_since_reset after auto-reset
         
-        # Check total quota limit
+        # Check total quota limit - still raise error for this as it's a hard limit
         if _total_requests >= MAX_TOTAL_QUOTA:
             time_until_reset = _AUTO_RESET_INTERVAL - time_since_reset
             raise RuntimeError(
@@ -131,10 +133,22 @@ def rate_limit():
                 sleep_time = _MIN_REQUEST_INTERVAL - elapsed
         
         # Record this request (before releasing lock to ensure atomicity)
-        _request_times.append(current_time)
-        _total_requests += 1
+        # If we're waiting due to rate limit, record the request time after the wait
+        if wait_time <= 0:
+            _request_times.append(current_time)
+            _total_requests += 1
     
     # Release lock before sleeping to avoid blocking other threads
-    if sleep_time > 0:
+    if wait_time > 0:
+        time.sleep(wait_time)
+        # After waiting, record the request with the new time
+        with _lock:
+            current_time = time.time()
+            # Clean old requests again after waiting
+            while _request_times and current_time - _request_times[0] > 30:
+                _request_times.popleft()
+            _request_times.append(current_time)
+            _total_requests += 1
+    elif sleep_time > 0:
         time.sleep(sleep_time)
 

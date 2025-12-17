@@ -166,6 +166,14 @@ enum TrdAccStatus
     TrdAccStatus_Disabled = 1;
 }
 
+// 账户类型
+enum TrdAccRole
+{
+	TrdAccRole_Unknown = 0;  //未知
+	TrdAccRole_Normal = 1;  //普通账户
+	TrdAccRole_Master = 2;  //主账户
+}
+
 //货币种类
 enum Currency
 {
@@ -277,6 +285,7 @@ message TrdAcc
 	optional int32 simAccType = 7; //模拟交易账号类型，取值见SimAccType
     optional string uniCardNum = 8;  //所属综合账户卡号
     optional int32 accStatus = 9; //账号状态，取值见TrdAccStatus
+	optional int32 accRole = 10; //账号分类，是不是主账号，取值见TrdAccRole
 }
 
 //账户资金结构
