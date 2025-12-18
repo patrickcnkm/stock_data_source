@@ -5,3 +5,9 @@ __pycache__/
 *.sqlite
 .venv/
 data/quant.duckdb
+# DuckDB database files
+*.duckdb
+# Large binary files in venv
+*.so
+*.dylib
+*.dll
